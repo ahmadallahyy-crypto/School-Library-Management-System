@@ -1,91 +1,52 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // auth.service.js
-//
-// The service layer for all authentication logic.
-// Controllers stay thin by delegating every real operation here.
-// This file owns: token creation, credential verification, token rotation,
-// logout invalidation, and password changes.
-// It never touches req/res — it only works with plain data and throws ApiErrors.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const jwt              = require("jsonwebtoken");
+const bcrypt           = require("bcryptjs");
 const LibraryAttendant = require("../models/LibraryAttendant");
+const Otp              = require("../models/Otp");
 const ApiError         = require("../utils/ApiError");
+const { sendOtpEmail } = require("./email.service");
 
 const {
-  JWT_SECRET,             // Secret key used to sign/verify short-lived access tokens
-  JWT_EXPIRES_IN,         // e.g. "15m" — how long an access token stays valid
-  JWT_REFRESH_SECRET,     // Separate secret for refresh tokens — different key = tighter scope
-  JWT_REFRESH_EXPIRES_IN, // e.g. "7d" — how long a refresh token stays valid
+  JWT_SECRET,
+  JWT_EXPIRES_IN,
+  JWT_REFRESH_SECRET,
+  JWT_REFRESH_EXPIRES_IN,
 } = require("../config/env");
 
 
 // ─── Token Helpers ────────────────────────────────────────────────────────────
-// Private functions — not exported — used only inside this module.
 
-/**
- * signAccessToken
- * Creates a short-lived JWT the client attaches to every protected API request.
- * Payload is minimal (just the attendant's DB id) to keep the token small.
- */
 const signAccessToken = (id) =>
-  jwt.sign(
-    { id },                          // Payload: only the attendant's MongoDB ObjectId
-    JWT_SECRET,                      // Signed with the access-token-specific secret
-    { expiresIn: JWT_EXPIRES_IN }    // Token self-expires; no DB lookup needed to detect expiry
-  );
+  jwt.sign({ id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
-/**
- * signRefreshToken
- * Creates a long-lived JWT stored in the DB so it can be explicitly revoked.
- * Uses a different secret from access tokens so a compromised access secret
- * cannot be used to forge refresh tokens (and vice versa).
- */
 const signRefreshToken = (id) =>
-  jwt.sign(
-    { id },                                   // Same minimal payload
-    JWT_REFRESH_SECRET,                       // Different secret from access token for isolation
-    { expiresIn: JWT_REFRESH_EXPIRES_IN }     // Long window (days) so users aren't forced to re-login often
-  );
+  jwt.sign({ id }, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRES_IN });
 
 
 // ─── login ────────────────────────────────────────────────────────────────────
 const login = async (email, password) => {
 
-  // Query the DB for a document matching the supplied email.
-  // .select("+password") is required because the schema marks `password` as
-  // select:false — excluded from all queries by default for safety.
   const attendant = await LibraryAttendant
     .findOne({ email })
     .select("+password");
 
-  // Security: use a single generic error message whether the email is unknown
-  // OR the password is wrong — prevents email enumeration attacks.
   if (!attendant || !(await attendant.comparePassword(password))) {
     throw new ApiError(401, "Invalid credentials.");
   }
 
-  // Secondary guard: a deactivated attendant can still pass the password check above
   if (!attendant.isActive) {
     throw new ApiError(401, "Your account has been deactivated. Contact an admin.");
   }
 
-  // Record the exact moment this successful login occurred.
-  // Set BEFORE .save() so the timestamp is written in the same DB call as the refresh token.
-  attendant.lastLoginAt = new Date();
-
-  // Generate a fresh token pair for this session
-  const accessToken  = signAccessToken(attendant._id);
-  const refreshToken = signRefreshToken(attendant._id);
-
-  // Persist the refresh token in the DB so logout can explicitly revoke it
+  attendant.lastLoginAt  = new Date();
+  const accessToken      = signAccessToken(attendant._id);
+  const refreshToken     = signRefreshToken(attendant._id);
   attendant.refreshToken = refreshToken;
-
-  // validateBeforeSave: false — only updating refreshToken and lastLoginAt,
-  // so we skip re-running all Mongoose validators (faster, avoids spurious errors)
   await attendant.save({ validateBeforeSave: false });
 
-  // Strip sensitive fields (password hash, raw refreshToken) before returning
   return { attendant: attendant.toSafeObject(), accessToken, refreshToken };
 };
 
@@ -94,35 +55,23 @@ const login = async (email, password) => {
 const refresh = async (incomingToken) => {
 
   let decoded;
-
   try {
-    // jwt.verify() checks signature AND expiry simultaneously.
-    // Throws TokenExpiredError or JsonWebTokenError on failure.
     decoded = jwt.verify(incomingToken, JWT_REFRESH_SECRET);
   } catch {
     throw new ApiError(401, "Invalid or expired refresh token. Please log in again.");
   }
 
-  // Token signature was valid — now check the DB to see if it was revoked.
-  // .select("+refreshToken") opts in to the field excluded by default.
   const attendant = await LibraryAttendant
     .findById(decoded.id)
     .select("+refreshToken");
 
-  // Two failure modes:
-  //   • Account deleted after token was issued
-  //   • Stored token doesn't match — already rotated or nulled by logout
   if (!attendant || attendant.refreshToken !== incomingToken) {
     throw new ApiError(401, "Refresh token has been revoked. Please log in again.");
   }
 
-  // Token rotation: generate a completely new pair and invalidate the old refresh token.
-  // If a refresh token is stolen, it can only be used once before the legitimate
-  // user's next refresh overwrites it — the attacker's copy becomes useless immediately.
-  const accessToken  = signAccessToken(attendant._id);
-  const refreshToken = signRefreshToken(attendant._id);
-
-  attendant.refreshToken = refreshToken; // Old token is now dead
+  const accessToken      = signAccessToken(attendant._id);
+  const refreshToken     = signRefreshToken(attendant._id);
+  attendant.refreshToken = refreshToken;
   await attendant.save({ validateBeforeSave: false });
 
   return { accessToken, refreshToken };
@@ -131,54 +80,104 @@ const refresh = async (incomingToken) => {
 
 // ─── logout ───────────────────────────────────────────────────────────────────
 const logout = async (attendantId) => {
-
-  // One targeted update — no need to load the full document into memory.
-  // Setting refreshToken to null means any future refresh() call will fail
-  // the `attendant.refreshToken !== incomingToken` check and be rejected.
-  // The access token still lives until natural expiry (e.g. 15 min) —
-  // an accepted trade-off with stateless JWTs. The passwordChangedAt check
-  // in protect middleware handles the rare case where this matters.
-  await LibraryAttendant.findByIdAndUpdate(
-    attendantId,
-    { refreshToken: null } // Revoke server-side — client should also discard both tokens
-  );
+  await LibraryAttendant.findByIdAndUpdate(attendantId, { refreshToken: null });
 };
 
 
 // ─── changePassword ───────────────────────────────────────────────────────────
 const changePassword = async (attendantId, currentPassword, newPassword) => {
 
-  // Fetch with password field included (excluded by default via select:false)
   const attendant = await LibraryAttendant
     .findById(attendantId)
     .select("+password");
 
-  // Verify they actually know the current password before allowing a change.
-  // Prevents a stolen access token from being used to lock out the real owner.
   if (!(await attendant.comparePassword(currentPassword))) {
     throw new ApiError(400, "Current password is incorrect.");
   }
 
-  // Assign the new plain-text password — the model's pre('save') hook will
-  // intercept this and run bcrypt.hash() before writing to the DB.
-  attendant.password = newPassword;
-
-  // ── FIX: Record when the password was changed ──────────────────────────
-  // This timestamp is checked by protect middleware (auth.middleware.js Step 5).
-  // Any access token issued BEFORE this timestamp will be rejected, effectively
-  // invalidating all active sessions the moment the password is changed.
-  // This closes the window where a stolen token stays valid post-password-change.
+  attendant.password          = newPassword;
   attendant.passwordChangedAt = new Date();
-
-  // ── FIX: Clear the stored refresh token ───────────────────────────────
-  // Forces the user to log in again with the new password to get fresh tokens.
-  // Any existing refresh token is now dead — replaying it will fail in refresh().
-  attendant.refreshToken = null;
-
-  // .save() (without validateBeforeSave:false) triggers the hashing middleware.
-  // Full validation is intentional — new password may have length/complexity rules.
+  attendant.refreshToken      = null;
   await attendant.save();
 };
 
 
-module.exports = { login, refresh, logout, changePassword };
+// ─── sendOtp ──────────────────────────────────────────────────────────────────
+// Step 1 of 2FA — verify credentials then generate and email a 6-digit OTP
+const sendOtp = async (email, password) => {
+
+  // Verify credentials first
+  const attendant = await LibraryAttendant
+    .findOne({ email })
+    .select("+password");
+
+  if (!attendant || !(await attendant.comparePassword(password))) {
+    throw new ApiError(401, "Invalid credentials.");
+  }
+
+  if (!attendant.isActive) {
+    throw new ApiError(401, "Your account has been deactivated. Contact an admin.");
+  }
+
+  // Generate random 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+  // Hash before saving — never store plain OTP in DB
+  const hashedOtp = await bcrypt.hash(otp, 10);
+
+  // Delete any existing OTP for this email — only one active at a time
+  await Otp.deleteMany({ email });
+
+  // Save hashed OTP with 10-minute expiry
+  await Otp.create({
+    email,
+    otp:       hashedOtp,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  });
+
+  // Send plain OTP to user's email
+  await sendOtpEmail(email, otp, attendant.name);
+
+  // Return email so frontend can pre-fill the verify screen
+  return { email };
+};
+
+
+// ─── verifyOtp ────────────────────────────────────────────────────────────────
+// Step 2 of 2FA — verify OTP then issue tokens
+const verifyOtp = async (email, otp) => {
+
+  const otpDoc = await Otp.findOne({ email });
+
+  if (!otpDoc) {
+    throw new ApiError(400, "No OTP found for this email. Please log in again.");
+  }
+
+  // Check expiry
+  if (otpDoc.expiresAt < new Date()) {
+    await Otp.deleteOne({ email });
+    throw new ApiError(400, "OTP has expired. Please log in again.");
+  }
+
+  // Compare submitted OTP with hash
+  const isMatch = await bcrypt.compare(otp, otpDoc.otp);
+  if (!isMatch) {
+    throw new ApiError(400, "Invalid OTP. Please check your email and try again.");
+  }
+
+  // Delete immediately — single use only
+  await Otp.deleteOne({ email });
+
+  // Issue tokens
+  const attendant        = await LibraryAttendant.findOne({ email });
+  attendant.lastLoginAt  = new Date();
+  const accessToken      = signAccessToken(attendant._id);
+  const refreshToken     = signRefreshToken(attendant._id);
+  attendant.refreshToken = refreshToken;
+  await attendant.save({ validateBeforeSave: false });
+
+  return { attendant: attendant.toSafeObject(), accessToken, refreshToken };
+};
+
+
+module.exports = { login, refresh, logout, changePassword, sendOtp, verifyOtp };

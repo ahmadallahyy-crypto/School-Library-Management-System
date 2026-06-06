@@ -36,4 +36,8 @@ module.exports = {
   SEED_ADMIN_EMAIL:      process.env.SEED_ADMIN_EMAIL    || "admin@school.com",
   SEED_ADMIN_PASSWORD:   process.env.SEED_ADMIN_PASSWORD || "Admin@12345",
   SEED_ADMIN_STAFF_ID:   process.env.SEED_ADMIN_STAFF_ID || "LIB-ADMIN-001",
+
+  // Email — used by Nodemailer to send OTP codes via Gmail
+  EMAIL_USER: process.env.EMAIL_USER, // your Gmail address
+  EMAIL_PASS: process.env.EMAIL_PASS, // 16-character Google App Password
 };
