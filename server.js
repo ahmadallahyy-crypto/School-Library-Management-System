@@ -1,24 +1,30 @@
 /**
  * server.js — Entry point.
  * 1. Connect to MongoDB
- * 2. Start the HTTP server
- * 3. Graceful shutdown on SIGTERM / SIGINT
- * 4. Catch unhandled errors
- *
- * App logic lives in src/app.js so tests can import it without starting a server.
+ * 2. Register background jobs (cron)
+ * 3. Start the HTTP server
+ * 4. Graceful shutdown on SIGTERM / SIGINT
+ * 5. Catch unhandled errors
  */
 
-const app       = require("./src/app");
-const connectDB = require("./src/config/db");
-const logger    = require("./src/config/logger");
-const { PORT }  = require("./src/config/env");
+const app          = require("./src/app");
+const connectDB    = require("./src/config/db");
+const logger       = require("./src/config/logger");
+const { PORT }     = require("./src/config/env");
+const { registerOverdueJob } = require("./src/jobs/overdue.job");
 
 let server;
 
-// Connect to DB first, then start the server
 const start = async () => {
+  // 1. Connect to MongoDB first — jobs and routes need the DB
   await connectDB();
 
+  // 2. Register background jobs — runs after DB is ready
+  // Overdue job checks every hour for books past their due date
+  // and sends email notifications to students
+  registerOverdueJob();
+
+  // 3. Start HTTP server
   server = app.listen(PORT, () => {
     logger.info(`─────────────────────────────────────────────`);
     logger.info(` School Library API`);
@@ -31,7 +37,6 @@ const start = async () => {
 };
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
-// Waits for active requests to finish before closing
 const shutdown = (signal) => {
   logger.info(`${signal} received — shutting down gracefully...`);
   if (server) {
@@ -44,16 +49,14 @@ const shutdown = (signal) => {
   }
 };
 
-process.on("SIGTERM", () => shutdown("SIGTERM")); // Hosting platforms (e.g. Heroku)
-process.on("SIGINT",  () => shutdown("SIGINT"));  // Ctrl+C in terminal
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));
 
-// Catch errors not wrapped in try/catch
 process.on("uncaughtException", (err) => {
   logger.error(`Uncaught Exception: ${err.message}\n${err.stack}`);
   process.exit(1);
 });
 
-// Catch promises rejected without .catch()
 process.on("unhandledRejection", (reason) => {
   logger.error(`Unhandled Rejection: ${reason}`);
   process.exit(1);
