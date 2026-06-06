@@ -3,7 +3,7 @@ const borrowService   = require("../services/borrow.service");
 const ApiResponse     = require("../utils/ApiResponse");
 const ApiError        = require("../utils/ApiError");
 const paginate        = require("../utils/paginate");
-const isValidObjectId = require("../utils/isValidObjectId");
+const {isValidObjectId} = require("../utils/isValidObjectId");
 
 
 // ── POST /api/borrows ─────────────────────────────────────────────────────────

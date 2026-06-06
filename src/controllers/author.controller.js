@@ -4,7 +4,7 @@ const ApiResponse     = require("../utils/ApiResponse");
 const ApiError        = require("../utils/ApiError");
 const paginate        = require("../utils/paginate");
 const pick            = require("../utils/pick");
-const isValidObjectId = require("../utils/isValidObjectId");
+const { isValidObjectId } = require("../utils/isValidObjectId");
 
 // Fields allowed during create and update — any other field sent is ignored
 const CREATABLE = ["name", "bio", "nationality"];
@@ -16,17 +16,17 @@ const UPDATABLE = ["name", "bio", "nationality"];
 exports.getAllAuthors = async (req, res, next) => {
   try {
     const filter = {};
-    // If search query exists, use MongoDB full-text search
-    // requires a text index on the Author collection
     if (req.query.search) filter.$text = { $search: req.query.search };
 
     const { data, meta } = await paginate(Author, filter, {
       page:  req.query.page,
       limit: req.query.limit,
-      sort:  { name: 1 }, // alphabetical order
+      sort:  { name: 1 },
     });
 
-    res.status(200).json(new ApiResponse(200, data, "Authors fetched.", meta));
+    const message = data.length === 0 ? "No authors found." : "Authors fetched.";
+    res.status(200).json(new ApiResponse(200, data, message, meta));
+
   } catch (err) { next(err); }
 };
 

@@ -85,7 +85,8 @@ exports.getAllStudents = async (req, res, next) => {
       sort:  req.query.search ? { score: { $meta: "textScore" } } : { name: 1 },
     });
 
-    res.status(200).json(new ApiResponse(200, data, "Students fetched.", meta));
+   const message = data.length === 0 ? "No students found." : "Students fetched.";
+res.status(200).json(new ApiResponse(200, data, message, meta));
   } catch (err) { next(err); }
 };
 
@@ -156,7 +157,6 @@ exports.createStudent = async (req, res, next) => {
 //    distinguish a full success (201) from a partial one and retry failures.
 exports.createBulkStudents = async (req, res, next) => {
   try {
-    // ── Input validation ──────────────────────────────────────────────────────
     if (!Array.isArray(req.body.students) || req.body.students.length === 0) {
       throw new ApiError(400, "Request body must include a non-empty 'students' array.");
     }
@@ -164,70 +164,47 @@ exports.createBulkStudents = async (req, res, next) => {
       throw new ApiError(400, `Bulk insert is limited to ${BULK_LIMIT} students per request.`);
     }
 
-    // ── Build safe document list with admission numbers ───────────────────────
-    // Sequential for loop (not Promise.all) so each generateAdmissionNumber()
-    // call sees the result of the previous one — prevents duplicate sequences
-    const safeList = [];
-    for (const s of req.body.students) {
-      const doc = pick(s, CREATABLE); // drop any fields not in CREATABLE
+    const created = [];
+    const errors  = [];
 
-      // Generate an admissionNumber if the caller didn't supply one
+    for (let i = 0; i < req.body.students.length; i++) {
+      const doc = pick(req.body.students[i], CREATABLE);
+
       if (!doc.admissionNumber) {
         doc.admissionNumber = await generateAdmissionNumber();
       }
 
-      safeList.push(doc);
-    }
-
-    // ── Insert all students in parallel ───────────────────────────────────────
-    // allSettled waits for every promise to finish (fulfilled or rejected)
-    // before continuing — one failure does NOT cancel the others
-    const results = await Promise.allSettled(safeList.map((s) => Student.create(s)));
-
-    // ── Separate successes from failures ──────────────────────────────────────
-    const created = [];
-    const errors  = [];
-
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled") {
-        // toObject() strips Mongoose internals before adding to the response
-        created.push(result.value.toObject());
-      } else {
-        const err = result.reason;
+      try {
+        const student = await Student.create(doc);
+        created.push(student.toObject());
+      } catch (err) {
         errors.push({
-          index,   // Which position in the original array failed (0-based)
-          // Translate duplicate-key errors (code 11000) into readable messages
-          // instead of exposing raw MongoDB index names to the client
+          index: i,
           message: err.code === 11000
             ? `Duplicate value for field: ${Object.keys(err.keyValue ?? {})[0] ?? "unknown"}`
             : err.message,
         });
       }
-    });
+    }
 
-    // ── 207 Partial success: some inserted, some failed ───────────────────────
     if (created.length > 0 && errors.length > 0) {
       return res.status(207).json({
         success: true,
         message: `Partial insert: ${created.length} succeeded, ${errors.length} failed.`,
         data:    created,
-        errors,  // Caller can inspect and retry the failed entries
+        errors,
       });
     }
 
-    // ── 400 Total failure: nothing was inserted ───────────────────────────────
     if (created.length === 0) {
       throw new ApiError(400, "All inserts failed. Check the errors array for details.");
     }
 
-    // ── 201 Full success: all students inserted ───────────────────────────────
     res.status(201).json(
       new ApiResponse(201, created, `${created.length} student(s) registered successfully.`)
     );
   } catch (err) { next(err); }
 };
-
-
 // ── PUT /api/students/:id ─────────────────────────────────────────────────────
 // Updates an existing student's profile.
 // admissionNumber is excluded from UPDATABLE — it is a permanent identifier

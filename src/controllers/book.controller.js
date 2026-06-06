@@ -3,8 +3,7 @@ const ApiResponse     = require("../utils/ApiResponse");
 const ApiError        = require("../utils/ApiError");
 const paginate        = require("../utils/paginate");
 const pick            = require("../utils/pick");
-const isValidObjectId = require("../utils/isValidObjectId");
-
+const { isValidObjectId } = require("../utils/isValidObjectId");
 // Fields allowed on create — anything else sent by client is ignored
 const CREATABLE = ["title", "isbn", "author", "genre", "description",
                    "publishedYear", "publisher", "totalCopies", "shelfLocation"];
