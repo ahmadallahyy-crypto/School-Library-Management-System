@@ -46,7 +46,6 @@ exports.login = async (req, res, next) => {
       req.body.email,
       req.body.password
     );
-
     res.status(200).json(
       new ApiResponse(200, { attendant, accessToken, refreshToken }, "Logged in successfully.")
     );
@@ -94,7 +93,7 @@ exports.changePassword = async (req, res, next) => {
 
 
 // ─── POST /api/auth/send-otp ──────────────────────────────────────────────────
-// Step 1 of 2FA login — verify credentials then send OTP to email
+// Step 1 of 2FA login — verify credentials then send OTP
 exports.sendOtp = async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -115,18 +114,24 @@ exports.verifyOtp = async (req, res, next) => {
     );
   } catch (err) { next(err); }
 };
-// --- POST /api/auth/forgot-password ------------------------------------------
+
+
+// ─── POST /api/auth/forgot-password ──────────────────────────────────────────
+// Sends a password reset code to the user's email
 exports.forgotPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
     await authService.forgotPassword(email);
+    // Always return success — prevents email enumeration
     res.status(200).json(
       new ApiResponse(200, null, "If that email is registered, a reset code has been sent.")
     );
   } catch (err) { next(err); }
 };
 
-// --- POST /api/auth/reset-password -------------------------------------------
+
+// ─── POST /api/auth/reset-password ───────────────────────────────────────────
+// Verifies reset code and updates password
 exports.resetPassword = async (req, res, next) => {
   try {
     const { email, otp, newPassword } = req.body;
