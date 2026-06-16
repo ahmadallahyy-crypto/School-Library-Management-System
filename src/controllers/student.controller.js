@@ -115,10 +115,10 @@ exports.getAllStudents = async (req, res, next) => {
     // Step 4 — attach activeBorrows to each student document
     // toObject() converts Mongoose document to plain JS object so we can spread it
     // Default to 0 if no active borrows found in the map
-    const enriched = data.map(s => ({
-      ...s.toObject(),
-      activeBorrows: countMap[s._id.toString()] || 0,
-    }));
+   const enriched = data.map(s => ({
+  ...s,
+  activeBorrows: countMap[s._id?.toString()] || 0,
+}));
 
     const message = enriched.length === 0 ? "No students found." : "Students fetched.";
     res.status(200).json(new ApiResponse(200, enriched, message, meta));
