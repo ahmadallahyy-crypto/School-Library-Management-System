@@ -1,0 +1,17 @@
+[33mcommit 6843e2f9e5b18fa0246442714c6f51dc7b797520[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Dжсе Ршюефжл 🎲🍍 <ahmadallahyy@gmail.com>
+Date:   Thu Jun 18 21:38:55 2026 +0100
+
+    Debug route added
+
+[33mcommit 9b213cc00bf388ef08556f13b00406a06aa09455[m
+Author: Dжсе Ршюефжл 🎲🍍 <ahmadallahyy@gmail.com>
+Date:   Thu Jun 18 10:47:38 2026 +0100
+
+    add debug logging for CORS
+
+[33mcommit 8c567f9e1b82a4ca7e7250e418856f5382eee23e[m
+Author: Dжсе Ршюефжл 🎲🍍 <ahmadallahyy@gmail.com>
+Date:   Wed Jun 17 11:19:57 2026 +0100
+
+    Fix deployment issues
