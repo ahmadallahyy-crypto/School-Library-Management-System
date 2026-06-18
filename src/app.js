@@ -13,6 +13,10 @@ const app = express();
 // ── Security headers ──────────────────────────────────────────────────────────
 // Sets X-Frame-Options, Content-Security-Policy, etc.
 app.use(helmet());
+console.log('[DEBUG] NODE_ENV:', NODE_ENV);
+console.log('[DEBUG] ALLOWED_ORIGINS raw:', JSON.stringify(process.env.ALLOWED_ORIGINS));
+console.log('[DEBUG] ALLOWED_ORIGINS parsed:', process.env.ALLOWED_ORIGINS?.split(","));
+
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 app.use(cors({
